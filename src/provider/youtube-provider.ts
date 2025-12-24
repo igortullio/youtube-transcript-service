@@ -1,76 +1,49 @@
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import { YoutubeTranscript } from 'youtube-transcript-plus'
 import { env } from '../env/index.js'
+import { logger } from '../util/logger.js'
 import type { Transcript, TranscriptResult } from './transcript.js'
 
 export class YoutubeProvider implements Transcript {
   private static proxyAgent: ProxyAgent | null = null
 
-  private async proxyFetch(url: string, options: any = {}): Promise<Response> {
-    if (!YoutubeProvider.proxyAgent && env.proxyUrl) {
-      const safeProxy = env.proxyUrl.replace(/:([^:@]+)@/, ':***@')
-      console.log(`🔗 Configuring Proxy for Lib: ${safeProxy}`)
+  private getProxyAgent(): ProxyAgent {
+    if (!YoutubeProvider.proxyAgent) {
+      const safeProxyUrl = env.proxyUrl.replace(/:([^:@]+)@/, ':***@')
+      logger.info(`🔗 Initializing Proxy Agent`, { proxy: safeProxyUrl })
       YoutubeProvider.proxyAgent = new ProxyAgent(env.proxyUrl)
     }
+    return YoutubeProvider.proxyAgent
+  }
 
-    const headers = {
-      ...options.headers,
-      'User-Agent':
-        options.userAgent ||
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-      Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+433; SOCS=CAISBAgVEBg;',
-    }
-
-    const fetchConfig: any = {
-      method: options.method || 'GET',
-      headers,
-      body: options.body,
-    }
-
-    if (YoutubeProvider.proxyAgent) {
-      fetchConfig.dispatcher = YoutubeProvider.proxyAgent
-    }
-
-    return undiciFetch(url, fetchConfig) as unknown as Response
+  private async proxyFetch(params: any): Promise<Response> {
+    return undiciFetch(params.url, {
+      method: params.method || 'GET',
+      body: params.body,
+      headers: {
+        ...params.headers,
+        'User-Agent': params.userAgent,
+        'Accept-Language': params.lang,
+      },
+      dispatcher: this.getProxyAgent(),
+    }) as unknown as Response
   }
 
   async fetchTranscript(videoId: string): Promise<TranscriptResult> {
+    logger.info(`Processing video`, { videoId, provider: 'YoutubePlus' })
+    const startTime = Date.now()
+
     try {
-      console.log(`Processing video: ${videoId} via YoutubePlus + Native Proxy Support`)
+      const customFetch = this.proxyFetch.bind(this)
 
       const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId, {
-        videoFetch: async (params: any) => {
-          return this.proxyFetch(params.url, {
-            method: 'GET',
-            userAgent: params.userAgent,
-            headers: { 'Accept-Language': params.lang },
-          })
-        },
-
-        playerFetch: async (params: any) => {
-          return this.proxyFetch(params.url, {
-            method: params.method,
-            body: params.body,
-            userAgent: params.userAgent,
-            headers: {
-              ...params.headers,
-              'Accept-Language': params.lang,
-            },
-          })
-        },
-
-        transcriptFetch: async (params: any) => {
-          return this.proxyFetch(params.url, {
-            method: 'GET',
-            userAgent: params.userAgent,
-            headers: { 'Accept-Language': params.lang },
-          })
-        },
+        videoFetch: customFetch,
+        playerFetch: customFetch,
+        transcriptFetch: customFetch,
       })
 
       if (!transcriptItems || transcriptItems.length === 0) {
-        throw new Error('Library returned empty transcript array.')
+        throw new Error('Library returned empty transcript array (Parsing failed).')
       }
 
       const fullText = transcriptItems
@@ -79,20 +52,19 @@ export class YoutubeProvider implements Transcript {
         .replace(/\s+/g, ' ')
         .trim()
 
+      const duration = Date.now() - startTime
+      logger.info(`Transcript fetched successfully`, {
+        videoId,
+        segments: transcriptItems.length,
+        durationMs: duration,
+      })
+
       return {
         text: fullText,
       }
     } catch (error: any) {
-      console.error(`Provider Error [YoutubePlus]: ${error.message}`)
-
-      if (error.message.includes('Video is unavailable')) {
-        throw new Error('Video is unavailable or private.')
-      }
-      if (error.message.includes('No transcript available')) {
-        throw new Error('No transcripts available for this video.')
-      }
-
-      throw new Error(error.message)
+      logger.error(`Failed to fetch transcript`, error, { videoId })
+      throw error
     }
   }
 }

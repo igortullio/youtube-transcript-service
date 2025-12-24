@@ -4,6 +4,7 @@ import helmet from 'helmet'
 import { env } from './env/index.js'
 import { authMiddleware } from './middleware/auth.js'
 import { YoutubeProvider } from './provider/youtube-provider.js'
+import { logger } from './util/logger.js'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -12,11 +13,15 @@ app.use(helmet())
 app.use(express.json())
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
+  windowMs: 15 * 60 * 1000, // 15 minutes
   limit: 100,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
+  handler: (req, res, _, options) => {
+    logger.warn(`Rate limit exceeded`, { ip: req.ip })
+    res.status(options.statusCode).send(options.message)
+  },
 })
 app.use(limiter)
 
@@ -34,8 +39,6 @@ app.get('/transcript/:videoId', authMiddleware, async (req, res) => {
   }
 
   try {
-    console.log(`Processing request for video: ${videoId}`)
-
     const result = await transcriptProvider.fetchTranscript(videoId)
 
     return res.json({
@@ -46,19 +49,47 @@ app.get('/transcript/:videoId', authMiddleware, async (req, res) => {
       },
     })
   } catch (error: any) {
-    if (error.message.includes('No transcript found')) {
-      return res.status(404).json({ error: 'Transcript not available for this video' })
-    }
-    if (error.message.includes('Video unavailable')) {
-      return res.status(404).json({ error: 'Video not found or private' })
+    const errorMessage = error?.message?.toLowerCase() || 'unknown error'
+
+    if (
+      errorMessage.includes('video is unavailable') ||
+      errorMessage.includes('transcript is disabled') ||
+      errorMessage.includes('no transcript is available') ||
+      errorMessage.includes('no transcript available') ||
+      errorMessage.includes('not available in the specified language')
+    ) {
+      return res.status(404).json({
+        error: 'Transcript unavailable',
+        reason: error.message,
+      })
     }
 
-    console.error(error)
-    return res.status(500).json({ error: 'Internal Server Error', details: error.message })
+    if (errorMessage.includes('invalid video id')) {
+      return res.status(400).json({ error: 'Invalid Video ID' })
+    }
+
+    if (errorMessage.includes('too many requests') || errorMessage.includes('recaptcha')) {
+      logger.error('YouTube Rate Limit/Captcha Triggered', { videoId })
+      return res.status(429).json({
+        error: 'YouTube blocked the request (Captcha/Rate Limit)',
+        retryable: true,
+      })
+    }
+
+    if (error.code === 'UND_ERR_CONNECT_TIMEOUT' || error.code === 'ECONNRESET') {
+      logger.error('Proxy Connection Error', { code: error.code })
+      return res.status(502).json({ error: 'Upstream Proxy Error', retryable: true })
+    }
+
+    logger.error(`Internal Error processing video ${videoId}`, error)
+
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      details: env.xApiKey ? error.message : undefined,
+    })
   }
 })
 
 app.listen(env.port, () => {
-  console.log(`🚀 Service running on port ${env.port}`)
-  console.log(`🛡️ Security enabled: Rate Limit & API Key check`)
+  logger.info(`🚀 Service running on port ${env.port}`)
 })
