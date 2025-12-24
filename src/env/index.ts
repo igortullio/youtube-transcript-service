@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { z } from 'zod'
 
 const envSchema = z.object({
-  X_API_KEY: z.string(),
+  X_API_KEY: z.hash('sha256'),
   SERVER_PORT: z.coerce.number().default(3000),
 })
 
