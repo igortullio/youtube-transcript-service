@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 const envSchema = z.object({
   X_API_KEY: z.hash('sha256'),
+  YOUTUBE_COOKIES: z.string().default(''),
   SERVER_PORT: z.coerce.number().default(3000),
 })
 
@@ -15,5 +16,6 @@ if (_env.success === false) {
 
 export const env = {
   xApiKey: _env.data.X_API_KEY,
+  youtubeCookies: _env.data.YOUTUBE_COOKIES,
   port: _env.data.SERVER_PORT,
 } as const
