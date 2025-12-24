@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import { env } from './env/index.js'
 import { authMiddleware } from './middleware/auth.js'
-import { YoutubeProvider } from './providers/youtube-provider.js'
+import { YoutubeProvider } from './provider/youtube-provider.js'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -46,7 +46,6 @@ app.get('/transcript/:videoId', authMiddleware, async (req, res) => {
       },
     })
   } catch (error: any) {
-    // Tratamento de erros conhecidos
     if (error.message.includes('No transcript found')) {
       return res.status(404).json({ error: 'Transcript not available for this video' })
     }
